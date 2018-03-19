@@ -477,11 +477,25 @@ public abstract class HttpObjectDecoder extends ByteToMessageDecoder {
             }
 
             switch (code) {
-            case 204: case 205: case 304:
+            case 204: case 304:
                 return true;
             }
         }
         return false;
+    }
+
+    /**
+     * Returns true if the server switched to a different protocol than HTTP/1.0 or HTTP/1.1, e.g. HTTP/2 or Websocket.
+     * Returns false if the upgrade happened in a different layer, e.g. upgrade from HTTP/1.1 to HTTP/1.1 over TLS.
+     */
+    protected boolean isSwitchingToNonHttp1Protocol(HttpResponse msg) {
+        if (msg.status().code() != HttpResponseStatus.SWITCHING_PROTOCOLS.code()) {
+            return false;
+        }
+        String newProtocol = msg.headers().get(HttpHeaderNames.UPGRADE);
+        return newProtocol == null ||
+                !newProtocol.contains(HttpVersion.HTTP_1_0.text()) &&
+                !newProtocol.contains(HttpVersion.HTTP_1_1.text());
     }
 
     /**
@@ -503,7 +517,7 @@ public abstract class HttpObjectDecoder extends ByteToMessageDecoder {
         trailer = null;
         if (!isDecodingRequest()) {
             HttpResponse res = (HttpResponse) message;
-            if (res != null && res.status().code() == 101) {
+            if (res != null && isSwitchingToNonHttp1Protocol(res)) {
                 currentState = State.UPGRADED;
                 return;
             }
@@ -574,12 +588,11 @@ public abstract class HttpObjectDecoder extends ByteToMessageDecoder {
             do {
                 char firstChar = line.charAt(0);
                 if (name != null && (firstChar == ' ' || firstChar == '\t')) {
+                    //please do not make one line from below code
+                    //as it breaks +XX:OptimizeStringConcat optimization
                     String trimmedLine = line.toString().trim();
-                    StringBuilder buf = new StringBuilder(value.length() + trimmedLine.length() + 1);
-                    buf.append(value)
-                       .append(' ')
-                       .append(trimmedLine);
-                    value = buf.toString();
+                    String valueStr = String.valueOf(value);
+                    value = valueStr + ' ' + trimmedLine;
                 } else {
                     if (name != null) {
                         headers.add(name, value);
@@ -641,14 +654,11 @@ public abstract class HttpObjectDecoder extends ByteToMessageDecoder {
                     List<String> current = trailer.trailingHeaders().getAll(lastHeader);
                     if (!current.isEmpty()) {
                         int lastPos = current.size() - 1;
+                        //please do not make one line from below code
+                        //as it breaks +XX:OptimizeStringConcat optimization
                         String lineTrimmed = line.toString().trim();
-                        CharSequence currentLastPos = current.get(lastPos);
-                        StringBuilder b = new StringBuilder(currentLastPos.length() + lineTrimmed.length());
-                        b.append(currentLastPos)
-                         .append(lineTrimmed);
-                        current.set(lastPos, b.toString());
-                    } else {
-                        // Content-Length, Transfer-Encoding, or Trailer
+                        String currentLastPos = current.get(lastPos);
+                        current.set(lastPos, currentLastPos + lineTrimmed);
                     }
                 } else {
                     splitHeader(line);

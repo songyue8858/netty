@@ -64,9 +64,9 @@ import java.util.Iterator;
 import java.util.List;
 
 import static io.netty.resolver.dns.DefaultDnsServerAddressStreamProvider.DNS_PORT;
+import static io.netty.resolver.dns.UnixResolverDnsServerAddressStreamProvider.parseEtcResolverFirstNdots;
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
 import static io.netty.util.internal.ObjectUtil.checkPositive;
-import static io.netty.util.internal.ObjectUtil.checkPositiveOrZero;
 
 /**
  * A DNS-based {@link InetNameResolver}.
@@ -97,6 +97,7 @@ public class DnsNameResolver extends InetNameResolver {
 
     static final ResolvedAddressTypes DEFAULT_RESOLVE_ADDRESS_TYPES;
     static final String[] DEFAULT_SEARCH_DOMAINS;
+    private static final int DEFAULT_NDOTS;
 
     static {
         if (NetUtil.isIpV4StackPreferred()) {
@@ -129,6 +130,14 @@ public class DnsNameResolver extends InetNameResolver {
             searchDomains = EmptyArrays.EMPTY_STRINGS;
         }
         DEFAULT_SEARCH_DOMAINS = searchDomains;
+
+        int ndots;
+        try {
+            ndots = parseEtcResolverFirstNdots();
+        } catch (Exception ignore) {
+            ndots = UnixResolverDnsServerAddressStreamProvider.DEFAULT_NDOTS;
+        }
+        DEFAULT_NDOTS = ndots;
     }
 
     private static final DatagramDnsResponseDecoder DECODER = new DatagramDnsResponseDecoder();
@@ -158,7 +167,6 @@ public class DnsNameResolver extends InetNameResolver {
 
     private final long queryTimeoutMillis;
     private final int maxQueriesPerResolve;
-    private final boolean traceEnabled;
     private final ResolvedAddressTypes resolvedAddressTypes;
     private final InternetProtocolFamily[] resolvedInternetProtocolFamilies;
     private final boolean recursionDesired;
@@ -195,6 +203,7 @@ public class DnsNameResolver extends InetNameResolver {
      * @param dnsServerAddressStreamProvider The {@link DnsServerAddressStreamProvider} used to determine the name
      *                                       servers for each hostname lookup.
      * @param searchDomains the list of search domain
+     *                      (can be null, if so, will try to default to the underlying platform ones)
      * @param ndots the ndots value
      * @param decodeIdn {@code true} if domain / host names should be decoded to unicode when received.
      *                        See <a href="https://tools.ietf.org/html/rfc3492">rfc3492</a>.
@@ -222,7 +231,6 @@ public class DnsNameResolver extends InetNameResolver {
         this.resolvedAddressTypes = resolvedAddressTypes != null ? resolvedAddressTypes : DEFAULT_RESOLVE_ADDRESS_TYPES;
         this.recursionDesired = recursionDesired;
         this.maxQueriesPerResolve = checkPositive(maxQueriesPerResolve, "maxQueriesPerResolve");
-        this.traceEnabled = traceEnabled;
         this.maxPayloadSize = checkPositive(maxPayloadSize, "maxPayloadSize");
         this.optResourceEnabled = optResourceEnabled;
         this.hostsFileEntriesResolver = checkNotNull(hostsFileEntriesResolver, "hostsFileEntriesResolver");
@@ -230,10 +238,14 @@ public class DnsNameResolver extends InetNameResolver {
                 checkNotNull(dnsServerAddressStreamProvider, "dnsServerAddressStreamProvider");
         this.resolveCache = checkNotNull(resolveCache, "resolveCache");
         this.authoritativeDnsServerCache = checkNotNull(authoritativeDnsServerCache, "authoritativeDnsServerCache");
-        this.dnsQueryLifecycleObserverFactory =
+        this.dnsQueryLifecycleObserverFactory = traceEnabled ?
+                    dnsQueryLifecycleObserverFactory instanceof NoopDnsQueryLifecycleObserverFactory ?
+                    new TraceDnsQueryLifeCycleObserverFactory() :
+                new BiDnsQueryLifecycleObserverFactory(new TraceDnsQueryLifeCycleObserverFactory(),
+                                                       dnsQueryLifecycleObserverFactory) :
                 checkNotNull(dnsQueryLifecycleObserverFactory, "dnsQueryLifecycleObserverFactory");
-        this.searchDomains = checkNotNull(searchDomains, "searchDomains").clone();
-        this.ndots = checkPositiveOrZero(ndots, "ndots");
+        this.searchDomains = searchDomains != null ? searchDomains.clone() : DEFAULT_SEARCH_DOMAINS;
+        this.ndots = ndots >= 0 ? ndots : DEFAULT_NDOTS;
         this.decodeIdn = decodeIdn;
 
         switch (this.resolvedAddressTypes) {
@@ -387,14 +399,6 @@ public class DnsNameResolver extends InetNameResolver {
      */
     public int maxQueriesPerResolve() {
         return maxQueriesPerResolve;
-    }
-
-    /**
-     * Returns if this resolver should generate the detailed trace information in an exception message so that
-     * it is easier to understand the cause of resolution failure. The default value if {@code true}.
-     */
-    public boolean isTraceEnabled() {
-        return traceEnabled;
     }
 
     /**
@@ -595,42 +599,29 @@ public class DnsNameResolver extends InetNameResolver {
                                     DnsRecord[] additionals,
                                     Promise<InetAddress> promise,
                                     DnsCache resolveCache) {
-        final List<DnsCacheEntry> cachedEntries = resolveCache.get(hostname, additionals);
+        final List<? extends DnsCacheEntry> cachedEntries = resolveCache.get(hostname, additionals);
         if (cachedEntries == null || cachedEntries.isEmpty()) {
             return false;
         }
 
-        InetAddress address = null;
-        Throwable cause = null;
-        synchronized (cachedEntries) {
+        Throwable cause = cachedEntries.get(0).cause();
+        if (cause == null) {
             final int numEntries = cachedEntries.size();
-            assert numEntries > 0;
-
-            if (cachedEntries.get(0).cause() != null) {
-                cause = cachedEntries.get(0).cause();
-            } else {
-                // Find the first entry with the preferred address type.
-                for (InternetProtocolFamily f : resolvedInternetProtocolFamilies) {
-                    for (int i = 0; i < numEntries; i++) {
-                        final DnsCacheEntry e = cachedEntries.get(i);
-                        if (f.addressType().isInstance(e.address())) {
-                            address = e.address();
-                            break;
-                        }
+            // Find the first entry with the preferred address type.
+            for (InternetProtocolFamily f : resolvedInternetProtocolFamilies) {
+                for (int i = 0; i < numEntries; i++) {
+                    final DnsCacheEntry e = cachedEntries.get(i);
+                    if (f.addressType().isInstance(e.address())) {
+                        trySuccess(promise, e.address());
+                        return true;
                     }
                 }
             }
-        }
-
-        if (address != null) {
-            trySuccess(promise, address);
-            return true;
-        }
-        if (cause != null) {
+            return false;
+        } else {
             tryFailure(promise, cause);
             return true;
         }
-        return false;
     }
 
     private static <T> void trySuccess(Promise<T> promise, T result) {
@@ -725,43 +716,35 @@ public class DnsNameResolver extends InetNameResolver {
                                        DnsRecord[] additionals,
                                        Promise<List<InetAddress>> promise,
                                        DnsCache resolveCache) {
-        final List<DnsCacheEntry> cachedEntries = resolveCache.get(hostname, additionals);
+        final List<? extends DnsCacheEntry> cachedEntries = resolveCache.get(hostname, additionals);
         if (cachedEntries == null || cachedEntries.isEmpty()) {
             return false;
         }
 
-        List<InetAddress> result = null;
-        Throwable cause = null;
-        synchronized (cachedEntries) {
+        Throwable cause = cachedEntries.get(0).cause();
+        if (cause == null) {
+            List<InetAddress> result = null;
             final int numEntries = cachedEntries.size();
-            assert numEntries > 0;
-
-            if (cachedEntries.get(0).cause() != null) {
-                cause = cachedEntries.get(0).cause();
-            } else {
-                for (InternetProtocolFamily f : resolvedInternetProtocolFamilies) {
-                    for (int i = 0; i < numEntries; i++) {
-                        final DnsCacheEntry e = cachedEntries.get(i);
-                        if (f.addressType().isInstance(e.address())) {
-                            if (result == null) {
-                                result = new ArrayList<InetAddress>(numEntries);
-                            }
-                            result.add(e.address());
+            for (InternetProtocolFamily f : resolvedInternetProtocolFamilies) {
+                for (int i = 0; i < numEntries; i++) {
+                    final DnsCacheEntry e = cachedEntries.get(i);
+                    if (f.addressType().isInstance(e.address())) {
+                        if (result == null) {
+                            result = new ArrayList<InetAddress>(numEntries);
                         }
+                        result.add(e.address());
                     }
                 }
             }
-        }
-
-        if (result != null) {
-            trySuccess(promise, result);
-            return true;
-        }
-        if (cause != null) {
+            if (result != null) {
+                trySuccess(promise, result);
+                return true;
+            }
+            return false;
+        } else {
             tryFailure(promise, cause);
             return true;
         }
-        return false;
     }
 
     static final class ListResolverContext extends DnsNameResolverContext<List<InetAddress>> {
@@ -885,6 +868,24 @@ public class DnsNameResolver extends InetNameResolver {
             Promise<AddressedEnvelope<? extends DnsResponse, InetSocketAddress>> promise) {
 
         return query0(nameServerAddr, question, toArray(additionals, false), promise);
+    }
+
+    /**
+     * Returns {@code true} if the {@link Throwable} was caused by an timeout or transport error.
+     * These methods can be used on the {@link Future#cause()} that is returned by the various methods exposed by this
+     * {@link DnsNameResolver}.
+     */
+    public static boolean isTransportOrTimeoutError(Throwable cause) {
+        return cause != null && cause.getCause() instanceof DnsNameResolverException;
+    }
+
+    /**
+     * Returns {@code true} if the {@link Throwable} was caused by an timeout.
+     * These methods can be used on the {@link Future#cause()} that is returned by the various methods exposed by this
+     * {@link DnsNameResolver}.
+     */
+    public static boolean isTimeoutError(Throwable cause) {
+        return cause != null && cause.getCause() instanceof DnsNameResolverTimeoutException;
     }
 
     final Future<AddressedEnvelope<DnsResponse, InetSocketAddress>> query0(

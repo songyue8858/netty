@@ -49,6 +49,7 @@ import org.apache.directory.server.dns.messages.RecordClass;
 import org.apache.directory.server.dns.messages.RecordType;
 import org.apache.directory.server.dns.messages.ResourceRecord;
 import org.apache.directory.server.dns.messages.ResourceRecordModifier;
+import org.apache.directory.server.dns.messages.ResponseCode;
 import org.apache.directory.server.dns.store.DnsAttribute;
 import org.apache.directory.server.dns.store.RecordStore;
 import org.junit.AfterClass;
@@ -73,6 +74,7 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static io.netty.handler.codec.dns.DnsRecordType.A;
 import static io.netty.handler.codec.dns.DnsRecordType.AAAA;
@@ -94,6 +96,7 @@ import static org.junit.Assert.fail;
 public class DnsNameResolverTest {
 
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(DnsNameResolver.class);
+    private static final long DEFAULT_TEST_TIMEOUT_MS = 30000;
 
     // Using the top-100 web sites ranked in Alexa.com (Oct 2014)
     // Please use the following series of shell commands to get this up-to-date:
@@ -102,104 +105,105 @@ public class DnsNameResolverTest {
     // $ head -100 top-1m.csv | cut -d, -f2 | cut -d/ -f1 | while read L; do echo '"'"$L"'",'; done > topsites.txt
     private static final Set<String> DOMAINS = Collections.unmodifiableSet(new HashSet<String>(Arrays.asList(
             "google.com",
-            "facebook.com",
             "youtube.com",
-            "yahoo.com",
+            "facebook.com",
             "baidu.com",
             "wikipedia.org",
-            "amazon.com",
-            "twitter.com",
-            "qq.com",
-            "taobao.com",
-            "linkedin.com",
-            "google.co.in",
-            "live.com",
-            "hao123.com",
-            "sina.com.cn",
-            "blogspot.com",
-            "weibo.com",
-            "yahoo.co.jp",
-            "tmall.com",
-            "yandex.ru",
-            "sohu.com",
-            "bing.com",
-            "ebay.com",
-            "pinterest.com",
-            "vk.com",
-            "google.de",
-            "wordpress.com",
-            "apple.com",
-            "google.co.jp",
-            "google.co.uk",
-            "360.cn",
-            "instagram.com",
-            "google.fr",
-            "msn.com",
-            "ask.com",
-            "soso.com",
-            "google.com.br",
-            "tumblr.com",
-            "paypal.com",
-            "mail.ru",
-            "xvideos.com",
-            "microsoft.com",
-            "google.ru",
+            "yahoo.com",
             "reddit.com",
+            "google.co.in",
+            "qq.com",
+            "amazon.com",
+            "taobao.com",
+            "tmall.com",
+            "twitter.com",
+            "vk.com",
+            "live.com",
+            "sohu.com",
+            "instagram.com",
+            "google.co.jp",
+            "sina.com.cn",
+            "jd.com",
+            "weibo.com",
+            "360.cn",
+            "google.de",
+            "google.co.uk",
+            "google.com.br",
+            "list.tmall.com",
+            "google.ru",
+            "google.fr",
+            "yandex.ru",
+            "netflix.com",
             "google.it",
-            "imgur.com",
-            "163.com",
+            "google.com.hk",
+            "linkedin.com",
+            "pornhub.com",
+            "t.co",
             "google.es",
+            "twitch.tv",
+            "alipay.com",
+            "xvideos.com",
+            "ebay.com",
+            "yahoo.co.jp",
+            "google.ca",
+            "google.com.mx",
+            "bing.com",
+            "ok.ru",
+            "imgur.com",
+            "microsoft.com",
+            "mail.ru",
             "imdb.com",
             "aliexpress.com",
-            "t.co",
-            "go.com",
-            "adcash.com",
-            "craigslist.org",
-            "amazon.co.jp",
-            "alibaba.com",
-            "google.com.mx",
-            "stackoverflow.com",
-            "xhamster.com",
-            "fc2.com",
-            "google.ca",
-            "bbc.co.uk",
-            "espn.go.com",
-            "cnn.com",
-            "google.co.id",
-            "people.com.cn",
-            "gmw.cn",
-            "pornhub.com",
-            "blogger.com",
-            "huffingtonpost.com",
-            "flipkart.com",
-            "akamaihd.net",
+            "hao123.com",
+            "msn.com",
+            "tumblr.com",
+            "csdn.net",
+            "wikia.com",
+            "wordpress.com",
+            "office.com",
             "google.com.tr",
-            "amazon.de",
-            "netflix.com",
-            "onclickads.net",
-            "googleusercontent.com",
-            "kickass.to",
+            "livejasmin.com",
+            "amazon.co.jp",
+            "deloton.com",
+            "apple.com",
             "google.com.au",
+            "paypal.com",
+            "google.com.tw",
+            "bongacams.com",
+            "popads.net",
+            "whatsapp.com",
+            "blogspot.com",
+            "detail.tmall.com",
             "google.pl",
-            "xinhuanet.com",
-            "ebay.de",
-            "wordpress.org",
-            "odnoklassniki.ru",
-            "google.com.hk",
-            "adobe.com",
-            "dailymotion.com",
-            "dailymail.co.uk",
-            "indiatimes.com",
+            "microsoftonline.com",
+            "xhamster.com",
+            "google.co.id",
+            "github.com",
+            "stackoverflow.com",
+            "pinterest.com",
+            "amazon.de",
+            "diply.com",
             "amazon.co.uk",
+            "so.com",
+            "google.com.ar",
+            "coccoc.com",
+            "soso.com",
+            "espn.com",
+            "adobe.com",
+            "google.com.ua",
+            "tianya.cn",
             "xnxx.com",
-            "rakuten.co.jp",
+            "googleusercontent.com",
+            "savefrom.net",
+            "google.com.pk",
+            "amazon.in",
+            "nicovideo.jp",
+            "google.co.th",
             "dropbox.com",
-            "tudou.com",
-            "about.com",
-            "cnet.com",
-            "vimeo.com",
-            "redtube.com",
-            "blogspot.in",
+            "thepiratebay.org",
+            "google.com.sa",
+            "google.com.eg",
+            "pixnet.net",
             "localhost")));
 
     private static final Map<String, String> DOMAINS_PUNYCODE = new HashMap<String, String>();
@@ -298,13 +302,14 @@ public class DnsNameResolverTest {
                 .channelType(NioDatagramChannel.class)
                 .maxQueriesPerResolve(1)
                 .decodeIdn(decodeToUnicode)
-                .optResourceEnabled(false);
+                .optResourceEnabled(false)
+                .ndots(1);
 
         if (dnsServerAddressStreamProvider == null) {
             builder.nameServerProvider(new SingletonDnsServerAddressStreamProvider(dnsServer.localAddress()));
         } else {
             builder.nameServerProvider(new MultiDnsServerAddressStreamProvider(dnsServerAddressStreamProvider,
-                                                new SingletonDnsServerAddressStreamProvider(dnsServer.localAddress())));
+                    new SingletonDnsServerAddressStreamProvider(dnsServer.localAddress())));
         }
 
         return builder;
@@ -423,7 +428,7 @@ public class DnsNameResolverTest {
     }
 
     @Test
-    public void  testResolveA() throws Exception {
+    public void testResolveA() throws Exception {
         DnsNameResolver resolver = newResolver(ResolvedAddressTypes.IPV4_ONLY)
                 // Cache for eternity
                 .ttl(Integer.MAX_VALUE, Integer.MAX_VALUE)
@@ -473,12 +478,12 @@ public class DnsNameResolverTest {
         }
     }
 
-    @Test(timeout = 5000)
+    @Test(timeout = DEFAULT_TEST_TIMEOUT_MS)
     public void testNonCachedResolveEmptyHostName() throws Exception {
         testNonCachedResolveEmptyHostName("");
     }
 
-    @Test(timeout = 5000)
+    @Test(timeout = DEFAULT_TEST_TIMEOUT_MS)
     public void testNonCachedResolveNullHostName() throws Exception {
         testNonCachedResolveEmptyHostName(null);
     }
@@ -493,12 +498,12 @@ public class DnsNameResolverTest {
         }
     }
 
-    @Test(timeout = 5000)
+    @Test(timeout = DEFAULT_TEST_TIMEOUT_MS)
     public void testNonCachedResolveAllEmptyHostName() throws Exception {
         testNonCachedResolveAllEmptyHostName("");
     }
 
-    @Test(timeout = 5000)
+    @Test(timeout = DEFAULT_TEST_TIMEOUT_MS)
     public void testNonCachedResolveAllNullHostName() throws Exception {
         testNonCachedResolveAllEmptyHostName(null);
     }
@@ -641,7 +646,7 @@ public class DnsNameResolverTest {
             };
 
             negativeLookupThread.start();
-            negativeLookupThread.join(5000);
+            negativeLookupThread.join(DEFAULT_TEST_TIMEOUT_MS);
 
             if (negativeLookupThread.isAlive()) {
                 negativeLookupThread.interrupt();
@@ -672,7 +677,7 @@ public class DnsNameResolverTest {
                             observer.question.type() == CNAME || observer.question.type() == AAAA);
                 } else if (o instanceof QueryWrittenEvent) {
                     QueryFailedEvent failedEvent = (QueryFailedEvent) observer.events.poll();
-                } else {
+                } else if (!(o instanceof QueryFailedEvent)) {
                     fail("unexpected event type: " + o);
                 }
                 assertTrue(observer.events.isEmpty());
@@ -740,6 +745,183 @@ public class DnsNameResolverTest {
     }
 
     @Test
+    public void testCNAMEResolveAllIpv4() throws IOException, InterruptedException {
+        testCNAMERecursiveResolve(true);
+    }
+
+    @Test
+    public void testCNAMEResolveAllIpv6() throws IOException, InterruptedException {
+        testCNAMERecursiveResolve(false);
+    }
+
+    private static void testCNAMERecursiveResolve(boolean ipv4Preferred) throws IOException, InterruptedException {
+        final String firstName = "firstname.com";
+        final String secondName = "secondname.com";
+        final String lastName = "lastname.com";
+        final String ipv4Addr = "1.2.3.4";
+        final String ipv6Addr = "::1";
+        TestDnsServer dnsServer2 = new TestDnsServer(new RecordStore() {
+            @Override
+            public Set<ResourceRecord> getRecords(QuestionRecord question) throws DnsException {
+                ResourceRecordModifier rm = new ResourceRecordModifier();
+                rm.setDnsClass(RecordClass.IN);
+                rm.setDnsName(question.getDomainName());
+                rm.setDnsTtl(100);
+                rm.setDnsType(RecordType.CNAME);
+
+                if (question.getDomainName().equals(firstName)) {
+                    rm.put(DnsAttribute.DOMAIN_NAME, secondName);
+                } else if (question.getDomainName().equals(secondName)) {
+                    rm.put(DnsAttribute.DOMAIN_NAME, lastName);
+                } else if (question.getDomainName().equals(lastName)) {
+                    rm.setDnsType(question.getRecordType());
+                    switch (question.getRecordType()) {
+                        case A:
+                            rm.put(DnsAttribute.IP_ADDRESS, ipv4Addr);
+                            break;
+                        case AAAA:
+                            rm.put(DnsAttribute.IP_ADDRESS, ipv6Addr);
+                            break;
+                        default:
+                            return null;
+                    }
+                } else {
+                    return null;
+                }
+                return Collections.singleton(rm.getEntry());
+            }
+        });
+        dnsServer2.start();
+        DnsNameResolver resolver = null;
+        try {
+            DnsNameResolverBuilder builder = newResolver()
+                    .recursionDesired(true)
+                    .maxQueriesPerResolve(16)
+                    .nameServerProvider(new SingletonDnsServerAddressStreamProvider(dnsServer2.localAddress()));
+            if (ipv4Preferred) {
+                builder.resolvedAddressTypes(ResolvedAddressTypes.IPV4_PREFERRED);
+            } else {
+                builder.resolvedAddressTypes(ResolvedAddressTypes.IPV6_PREFERRED);
+            }
+            resolver = builder.build();
+            InetAddress resolvedAddress = resolver.resolve(firstName).syncUninterruptibly().getNow();
+            if (ipv4Preferred) {
+                assertEquals(ipv4Addr, resolvedAddress.getHostAddress());
+            } else {
+                assertEquals(ipv6Addr, NetUtil.toAddressString(resolvedAddress));
+            }
+            assertEquals(firstName, resolvedAddress.getHostName());
+        } finally {
+            dnsServer2.stop();
+            if (resolver != null) {
+                resolver.close();
+            }
+        }
+    }
+
+    @Test
+    public void testCNAMERecursiveResolveMultipleNameServersIPv4() throws IOException {
+        testCNAMERecursiveResolveMultipleNameServers(true);
+    }
+
+    @Test
+    public void testCNAMERecursiveResolveMultipleNameServersIPv6() throws IOException {
+        testCNAMERecursiveResolveMultipleNameServers(false);
+    }
+
+    private static void testCNAMERecursiveResolveMultipleNameServers(boolean ipv4Preferred) throws IOException {
+        final String firstName = "firstname.nettyfoo.com";
+        final String lastName = "lastname.nettybar.com";
+        final String ipv4Addr = "1.2.3.4";
+        final String ipv6Addr = "::1";
+        final AtomicBoolean hitServer2 = new AtomicBoolean();
+        final TestDnsServer dnsServer2 = new TestDnsServer(new RecordStore() {
+            @Override
+            public Set<ResourceRecord> getRecords(QuestionRecord question) throws DnsException {
+                hitServer2.set(true);
+                if (question.getDomainName().equals(firstName)) {
+                    ResourceRecordModifier rm = new ResourceRecordModifier();
+                    rm.setDnsClass(RecordClass.IN);
+                    rm.setDnsName(question.getDomainName());
+                    rm.setDnsTtl(100);
+                    rm.setDnsType(RecordType.CNAME);
+                    rm.put(DnsAttribute.DOMAIN_NAME, lastName);
+                    return Collections.singleton(rm.getEntry());
+                } else {
+                    throw new DnsException(ResponseCode.REFUSED);
+                }
+            }
+        });
+        final TestDnsServer dnsServer3 = new TestDnsServer(new RecordStore() {
+            @Override
+            public Set<ResourceRecord> getRecords(QuestionRecord question) throws DnsException {
+                if (question.getDomainName().equals(lastName)) {
+                    ResourceRecordModifier rm = new ResourceRecordModifier();
+                    rm.setDnsClass(RecordClass.IN);
+                    rm.setDnsName(question.getDomainName());
+                    rm.setDnsTtl(100);
+                    rm.setDnsType(question.getRecordType());
+                    switch (question.getRecordType()) {
+                        case A:
+                            rm.put(DnsAttribute.IP_ADDRESS, ipv4Addr);
+                            break;
+                        case AAAA:
+                            rm.put(DnsAttribute.IP_ADDRESS, ipv6Addr);
+                            break;
+                        default:
+                            return null;
+                    }
+
+                    return Collections.singleton(rm.getEntry());
+                } else {
+                    throw new DnsException(ResponseCode.REFUSED);
+                }
+            }
+        });
+        dnsServer2.start();
+        dnsServer3.start();
+        DnsNameResolver resolver = null;
+        try {
+            DnsCache nsCache = new DefaultDnsCache();
+            // What we want to test is the following:
+            // 1. Do a DNS query.
+            // 2. CNAME is returned, we want to lookup that CNAME on multiple DNS servers
+            // 3. The first DNS server should fail
+            // 4. The second DNS server should succeed
+            // This verifies that we do in fact follow multiple DNS servers in the CNAME resolution.
+            // The DnsCache is used for the name server cache, but doesn't provide a InetSocketAddress (only InetAddress
+            // so no port), so we only specify the name server in the cache, and then specify both name servers in the
+            // fallback name server provider.
+            nsCache.cache("nettyfoo.com.", null, dnsServer2.localAddress().getAddress(), 10000, group.next());
+            resolver = new DnsNameResolver(
+                    group.next(), new ReflectiveChannelFactory<DatagramChannel>(NioDatagramChannel.class),
+                    NoopDnsCache.INSTANCE, nsCache, NoopDnsQueryLifecycleObserverFactory.INSTANCE, 3000,
+                    ipv4Preferred ? ResolvedAddressTypes.IPV4_ONLY : ResolvedAddressTypes.IPV6_ONLY, true,
+                    10, true, 4096, false, HostsFileEntriesResolver.DEFAULT,
+                    new SequentialDnsServerAddressStreamProvider(dnsServer2.localAddress(), dnsServer3.localAddress()),
+                    DnsNameResolver.DEFAULT_SEARCH_DOMAINS, 0, true) {
+                @Override
+                int dnsRedirectPort(InetAddress server) {
+                    return hitServer2.get() ? dnsServer3.localAddress().getPort() : dnsServer2.localAddress().getPort();
+                }
+            };
+            InetAddress resolvedAddress = resolver.resolve(firstName).syncUninterruptibly().getNow();
+            if (ipv4Preferred) {
+                assertEquals(ipv4Addr, resolvedAddress.getHostAddress());
+            } else {
+                assertEquals(ipv6Addr, NetUtil.toAddressString(resolvedAddress));
+            }
+            assertEquals(firstName, resolvedAddress.getHostName());
+        } finally {
+            dnsServer2.stop();
+            dnsServer3.stop();
+            if (resolver != null) {
+                resolver.close();
+            }
+        }
+    }
+
+    @Test
     public void testResolveAllNullIpv4() {
         testResolveAll0(ResolvedAddressTypes.IPV4_ONLY, NetUtil.LOCALHOST4, null);
     }
@@ -784,6 +966,123 @@ public class DnsNameResolverTest {
             assertQueryObserver(resolver, AAAA);
         } finally {
             resolver.close();
+        }
+    }
+
+    @Test(timeout = DEFAULT_TEST_TIMEOUT_MS)
+    public void secondDnsServerShouldBeUsedBeforeCNAMEFirstServerNotStarted() throws IOException {
+        secondDnsServerShouldBeUsedBeforeCNAME(false);
+    }
+
+    @Test(timeout = DEFAULT_TEST_TIMEOUT_MS)
+    public void secondDnsServerShouldBeUsedBeforeCNAMEFirstServerFailResolve() throws IOException {
+        secondDnsServerShouldBeUsedBeforeCNAME(true);
+    }
+
+    private static void secondDnsServerShouldBeUsedBeforeCNAME(boolean startDnsServer1) throws IOException {
+        final String knownHostName = "netty.io";
+        final TestDnsServer dnsServer1 = new TestDnsServer(new HashSet<String>(Arrays.asList("notnetty.com")));
+        final TestDnsServer dnsServer2 = new TestDnsServer(new HashSet<String>(Arrays.asList(knownHostName)));
+        DnsNameResolver resolver = null;
+        try {
+            final InetSocketAddress dnsServer1Address;
+            if (startDnsServer1) {
+                dnsServer1.start();
+                dnsServer1Address = dnsServer1.localAddress();
+            } else {
+                // Some address where a DNS server will not be running.
+                dnsServer1Address = new InetSocketAddress("127.0.0.1", 22);
+            }
+            dnsServer2.start();
+
+            TestRecursiveCacheDnsQueryLifecycleObserverFactory lifecycleObserverFactory =
+                    new TestRecursiveCacheDnsQueryLifecycleObserverFactory();
+
+            DnsNameResolverBuilder builder = new DnsNameResolverBuilder(group.next())
+                    .dnsQueryLifecycleObserverFactory(lifecycleObserverFactory)
+                    .resolvedAddressTypes(ResolvedAddressTypes.IPV4_ONLY)
+                    .channelType(NioDatagramChannel.class)
+                    .queryTimeoutMillis(1000) // We expect timeouts if startDnsServer1 is false
+                    .optResourceEnabled(false)
+                    .ndots(1);
+
+            builder.nameServerProvider(new SequentialDnsServerAddressStreamProvider(dnsServer1Address,
+                    dnsServer2.localAddress()));
+            resolver = builder.build();
+            assertNotNull(resolver.resolve(knownHostName).syncUninterruptibly().getNow());
+
+            TestDnsQueryLifecycleObserver observer = lifecycleObserverFactory.observers.poll();
+            assertNotNull(observer);
+            assertEquals(1, lifecycleObserverFactory.observers.size());
+            assertEquals(2, observer.events.size());
+            QueryWrittenEvent writtenEvent = (QueryWrittenEvent) observer.events.poll();
+            assertEquals(dnsServer1Address, writtenEvent.dnsServerAddress);
+            QueryFailedEvent failedEvent = (QueryFailedEvent) observer.events.poll();
+
+            observer = lifecycleObserverFactory.observers.poll();
+            assertEquals(2, observer.events.size());
+            writtenEvent = (QueryWrittenEvent) observer.events.poll();
+            assertEquals(dnsServer2.localAddress(), writtenEvent.dnsServerAddress);
+            QuerySucceededEvent succeededEvent = (QuerySucceededEvent) observer.events.poll();
+        } finally {
+            if (resolver != null) {
+                resolver.close();
+            }
+            dnsServer1.stop();
+            dnsServer2.stop();
+        }
+    }
+
+    @Test(timeout = DEFAULT_TEST_TIMEOUT_MS)
+    public void aAndAAAAQueryShouldTryFirstDnsServerBeforeSecond() throws IOException {
+        final String knownHostName = "netty.io";
+        final TestDnsServer dnsServer1 = new TestDnsServer(new HashSet<String>(Arrays.asList("notnetty.com")));
+        final TestDnsServer dnsServer2 = new TestDnsServer(new HashSet<String>(Arrays.asList(knownHostName)));
+        DnsNameResolver resolver = null;
+        try {
+            dnsServer1.start();
+            dnsServer2.start();
+
+            TestRecursiveCacheDnsQueryLifecycleObserverFactory lifecycleObserverFactory =
+                    new TestRecursiveCacheDnsQueryLifecycleObserverFactory();
+
+            DnsNameResolverBuilder builder = new DnsNameResolverBuilder(group.next())
+                    .resolvedAddressTypes(ResolvedAddressTypes.IPV6_PREFERRED)
+                    .dnsQueryLifecycleObserverFactory(lifecycleObserverFactory)
+                    .channelType(NioDatagramChannel.class)
+                    .optResourceEnabled(false)
+                    .ndots(1);
+
+            builder.nameServerProvider(new SequentialDnsServerAddressStreamProvider(dnsServer1.localAddress(),
+                    dnsServer2.localAddress()));
+            resolver = builder.build();
+            assertNotNull(resolver.resolve(knownHostName).syncUninterruptibly().getNow());
+
+            TestDnsQueryLifecycleObserver observer = lifecycleObserverFactory.observers.poll();
+            assertNotNull(observer);
+            assertEquals(2, lifecycleObserverFactory.observers.size());
+            assertEquals(2, observer.events.size());
+            QueryWrittenEvent writtenEvent = (QueryWrittenEvent) observer.events.poll();
+            assertEquals(dnsServer1.localAddress(), writtenEvent.dnsServerAddress);
+            QueryFailedEvent failedEvent = (QueryFailedEvent) observer.events.poll();
+
+            observer = lifecycleObserverFactory.observers.poll();
+            assertEquals(2, observer.events.size());
+            writtenEvent = (QueryWrittenEvent) observer.events.poll();
+            assertEquals(dnsServer1.localAddress(), writtenEvent.dnsServerAddress);
+            failedEvent = (QueryFailedEvent) observer.events.poll();
+
+            observer = lifecycleObserverFactory.observers.poll();
+            assertEquals(2, observer.events.size());
+            writtenEvent = (QueryWrittenEvent) observer.events.poll();
+            assertEquals(dnsServer2.localAddress(), writtenEvent.dnsServerAddress);
+            QuerySucceededEvent succeededEvent = (QuerySucceededEvent) observer.events.poll();
+        } finally {
+            if (resolver != null) {
+                resolver.close();
+            }
+            dnsServer1.stop();
+            dnsServer2.stop();
         }
     }
 
@@ -852,7 +1151,7 @@ public class DnsNameResolverTest {
             if (cache) {
                 assertNull(nsCache.cache.get("io.", null));
                 assertNull(nsCache.cache.get("netty.io.", null));
-                List<DnsCacheEntry> entries = nsCache.cache.get("record.netty.io.", null);
+                List<? extends DnsCacheEntry> entries = nsCache.cache.get("record.netty.io.", null);
                 assertEquals(1, entries.size());
 
                 assertNull(nsCache.cache.get(hostname, null));
@@ -1040,7 +1339,8 @@ public class DnsNameResolverTest {
 
     private static final class TestDnsCache implements DnsCache {
         private final DnsCache cache;
-        final Map<String, List<DnsCacheEntry>> cacheHits = new HashMap<String, List<DnsCacheEntry>>();
+        final Map<String, List<? extends DnsCacheEntry>> cacheHits = new HashMap<String,
+                                                                                  List<? extends DnsCacheEntry>>();
 
         TestDnsCache(DnsCache cache) {
             this.cache = cache;
@@ -1057,22 +1357,22 @@ public class DnsNameResolverTest {
         }
 
         @Override
-        public List<DnsCacheEntry> get(String hostname, DnsRecord[] additionals) {
-            List<DnsCacheEntry> cacheEntries = cache.get(hostname, additionals);
+        public List<? extends DnsCacheEntry> get(String hostname, DnsRecord[] additionals) {
+            List<? extends DnsCacheEntry> cacheEntries = cache.get(hostname, additionals);
             cacheHits.put(hostname, cacheEntries);
             return cacheEntries;
         }
 
         @Override
-        public void cache(
+        public DnsCacheEntry cache(
                 String hostname, DnsRecord[] additionals, InetAddress address, long originalTtl, EventLoop loop) {
-            cache.cache(hostname, additionals, address, originalTtl, loop);
+            return cache.cache(hostname, additionals, address, originalTtl, loop);
         }
 
         @Override
-        public void cache(
+        public DnsCacheEntry cache(
                 String hostname, DnsRecord[] additionals, Throwable cause, EventLoop loop) {
-            cache.cache(hostname, additionals, cause, loop);
+            return cache.cache(hostname, additionals, cause, loop);
         }
     }
 
@@ -1126,5 +1426,52 @@ public class DnsNameResolverTest {
             rm.put(DnsAttribute.DOMAIN_NAME, domainName);
             return rm.getEntry();
         }
+    }
+
+    @Test(timeout = 3000)
+    public void testTimeoutNotCached() {
+        DnsCache cache = new DnsCache() {
+            @Override
+            public void clear() {
+                // NOOP
+            }
+
+            @Override
+            public boolean clear(String hostname) {
+                return false;
+            }
+
+            @Override
+            public List<? extends DnsCacheEntry> get(String hostname, DnsRecord[] additionals) {
+                return Collections.emptyList();
+            }
+
+            @Override
+            public DnsCacheEntry cache(String hostname, DnsRecord[] additionals, InetAddress address,
+                                       long originalTtl, EventLoop loop) {
+                fail("Should not be cached");
+                return null;
+            }
+
+            @Override
+            public DnsCacheEntry cache(String hostname, DnsRecord[] additionals, Throwable cause, EventLoop loop) {
+                fail("Should not be cached");
+                return null;
+            }
+        };
+        DnsNameResolverBuilder builder = newResolver();
+        builder.queryTimeoutMillis(100)
+                .authoritativeDnsServerCache(cache)
+                .resolveCache(cache)
+                .nameServerProvider(new SingletonDnsServerAddressStreamProvider(
+                        new InetSocketAddress(NetUtil.LOCALHOST, 12345)));
+        DnsNameResolver resolver = builder.build();
+        Future<InetAddress> result = resolver.resolve("doesnotexist.netty.io").awaitUninterruptibly();
+        Throwable cause = result.cause();
+        assertTrue(cause instanceof UnknownHostException);
+        assertTrue(cause.getCause() instanceof DnsNameResolverTimeoutException);
+        assertTrue(DnsNameResolver.isTimeoutError(cause));
+        assertTrue(DnsNameResolver.isTransportOrTimeoutError(cause));
+        resolver.close();
     }
 }
